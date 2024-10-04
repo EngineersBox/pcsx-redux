@@ -471,6 +471,10 @@ int mcReadSector(int deviceId, int sector, uint8_t* buffer) {
     int port = deviceId < 0 ? deviceId + 15 : deviceId;
     port >>= 4;
 
+    // FIXME: This will always fail on first invocation
+    //        for some ungodly reason, despite the initCard
+    //        handler explicitly setting both port 0 & 1's
+    //        g_mcFlags[...] values to 1.
     if ((g_mcFlags[port] & 1) == 0) return 0;
     if ((sector < 0) || (sector > 0x400)) return 0;
 
