@@ -472,9 +472,23 @@ int mcReadSector(int deviceId, int sector, uint8_t* buffer) {
     port >>= 4;
 
     // FIXME: This will always fail on first invocation
-    //        for some ungodly reason, despite the initCard
+    //        for some ungodly reason, despite the InitCARD
     //        handler explicitly setting both port 0 & 1's
     //        g_mcFlags[...] values to 1.
+    //
+    //        [HYPOTHESIS]:
+    //        This might be because card_info invokes buReadTOC
+    //        in the kernel which reads sector 0 which will
+    //        succeed, leading to g_buOperation[port] = 4, and
+    //        s_buCurrentState[port] = 1 which is then handled
+    //        buLowLevelOpCompleted will proceed to load sector
+    //        0 and check that the first two bytes are 'M' & 'C',
+    //        succeeding there. Next directory entries are zeroed
+    //        into the memcard, which always works, and lastly
+    //        another read is issued, this time to sector 1.
+    //        However, since the previous read left the
+    //        g_mcFlag[port] value as 2, this will fail the
+    //        check for g_mcFlag[port] & 1 == 1 to proceed
     if ((g_mcFlags[port] & 1) == 0) return 0;
     if ((sector < 0) || (sector > 0x400)) return 0;
 
