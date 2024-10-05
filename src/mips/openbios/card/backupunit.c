@@ -369,8 +369,10 @@ void buLowLevelOpCompleted() {
             }
             break;
         }
+        // mcRead
         case 4:
             switch (s_buCurrentState[port]) {
+                // Sector 0
                 case 1:
                     if ((buffer[0] != 'M') || (buffer[1] != 'C')) {
                         g_mcOverallSuccess = 0;

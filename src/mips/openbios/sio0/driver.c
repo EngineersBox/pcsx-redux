@@ -261,11 +261,17 @@ static void __attribute__((section(".ramtext"))) mcHandler(int v) {
     int delay = g_mcHandlerDelayPatch;
     for (unsigned i = 0; i < delay; i++) __asm__ __volatile__("");
 
+    // At the start of a handler call, this will be zero, so
+    // increment to 1 in order trigger the first buLowLevelOpCompleted
+    // stage
     g_mcOperation++;
+    // Invoke delegate operation handler
     int mcResult = g_mcHandlers[g_mcPortFlipping]();
 
     switch (mcResult) {
         case 0:
+            // Handler failed, reset IRQ to allow next card operation
+            // to be handled correctly
             IREG = ~IRQ_CONTROLLER;
             IMASK |= IRQ_CONTROLLER;
             break;
@@ -273,6 +279,8 @@ static void __attribute__((section(".ramtext"))) mcHandler(int v) {
             g_mcActionInProgress = 0;
             SIOS[0].ctrl = 0;
             g_mcOperation = 0;
+            // Dequeue the current handler and reset the IRQ to allow
+            // the next card operation to be handled correctly
             sysDeqIntRP(1, &g_mcHandlerInfo);
             IREG = ~IRQ_CONTROLLER;
             IMASK &= ~IRQ_CONTROLLER;
@@ -280,7 +288,11 @@ static void __attribute__((section(".ramtext"))) mcHandler(int v) {
             g_skipErrorOnNewCard = 0;
             g_mcFlags[g_mcPortFlipping] = 1;
             g_mcLastPort = g_mcPortFlipping;
+            // Perform necessary handling for resulting state of card
+            // after operation completes. This is specific to a handler's
+            // implementation and thus has many potential stages.
             syscall_buLowLevelOpCompleted();
+            // Emit a IO completed event
             deliverEvent(EVENT_CARD, 0x0004);
             break;
         default:
@@ -291,6 +303,7 @@ static void __attribute__((section(".ramtext"))) mcHandler(int v) {
                 g_mcFlags[g_mcPortFlipping] = 0x21;
                 g_mcLastPort = g_mcPortFlipping;
                 syscall_buLowLevelOpError1();
+                // Emit a failure event
                 deliverEvent(EVENT_CARD, 0x8000);
             }
             g_mcOperation = 0;
@@ -302,6 +315,11 @@ static void __attribute__((section(".ramtext"))) mcHandler(int v) {
     }
 }
 
+/**
+ * @brief Wrapper handler for card actions, ensuring event delivery,
+ *       delegate handler invocation and IRQ resets for next handling
+ *       cycle.
+ */
 static void __attribute__((section(".ramtext"))) firstStageCardAction() {
     undeliverEvent(EVENT_CARD, 0x0004);
     undeliverEvent(EVENT_CARD, 0x8000);
@@ -312,6 +330,8 @@ static void __attribute__((section(".ramtext"))) firstStageCardAction() {
     if (g_mcActionInProgress) {
         g_mcActionInProgress = 0;
         g_mcOperation = 0;
+        // Reset the IRQ flags to allow next card handler to trigger
+        // this handler
         IREG = ~IRQ_CONTROLLER;
         IMASK &= ~IRQ_CONTROLLER;
         SIOS[0].ctrl = 0;
@@ -339,6 +359,7 @@ static void __attribute__((section(".ramtext"))) firstStageCardAction() {
     sysEnqIntRP(1, &g_mcHandlerInfo);
     g_mcOperation = 0;
     g_mcGotError = 0;
+    // Invoke the delegate operation handler
     mcHandler(1);
 }
 
@@ -347,6 +368,10 @@ static int __attribute__((section(".ramtext"))) sio0Verifier() {
     return 1;
 }
 
+/**
+ * @brief Serial IO handler that forwards pad/card operations to 
+ *        delegate handlers
+ */
 static void __attribute__((section(".ramtext"))) sio0Handler(int v) {
     if (s_padStarted) {
         readPad(0);
@@ -357,6 +382,9 @@ static void __attribute__((section(".ramtext"))) sio0Handler(int v) {
     if (s_cardStarted) firstStageCardAction();
 }
 
+/**
+ * @brief Init serial IO handlers for performing operations and verification
+ */
 static void __attribute__((section(".ramtext"))) setupBasicSio0Handler() {
     g_sio0HandlerInfo.next = NULL;
     g_sio0HandlerInfo.handler = sio0Handler;
@@ -486,9 +514,10 @@ int mcReadSector(int deviceId, int sector, uint8_t* buffer) {
     //        succeeding there. Next directory entries are zeroed
     //        into the memcard, which always works, and lastly
     //        another read is issued, this time to sector 1.
-    //        However, since the previous read left the
-    //        g_mcFlag[port] value as 2, this will fail the
-    //        check for g_mcFlag[port] & 1 == 1 to proceed
+    //        Prior to buLowLevelOpCompleted being invoked, the
+    //        g_mcFlags value is reset to 1 which allows the next
+    //        read to complete successfully, moving on to the second
+    //        stage of the s_buCurrentState[port] = 2 where
     if ((g_mcFlags[port] & 1) == 0) return 0;
     if ((sector < 0) || (sector > 0x400)) return 0;
 
